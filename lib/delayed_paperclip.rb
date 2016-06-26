@@ -11,8 +11,7 @@ module DelayedPaperclip
       @options ||= {
         :background_job_class => detect_background_task,
         :url_with_processing  => true,
-        :processing_image_url => nil,
-        :queue => "paperclip"
+        :processing_image_url => nil
       }
     end
 
@@ -27,14 +26,14 @@ module DelayedPaperclip
       options[:background_job_class]
     end
 
-    def enqueue(instance_klass, instance_id, attachment_name)
-      processor.enqueue_delayed_paperclip(instance_klass, instance_id, attachment_name)
+    def enqueue(instance_klass, instance_id, attachment_name, shard = :master)
+      processor.enqueue_delayed_paperclip(instance_klass, instance_id, attachment_name, shard)
     end
 
-    def process_job(instance_klass, instance_id, attachment_name)
-      if instance = instance_klass.constantize.unscoped.where(id: instance_id).first
-        instance.send(attachment_name).process_delayed!
-      end
+    def process_job(instance_klass, instance_id, attachment_name, shard = :master)
+      instance_klass.constantize.unscoped.using(shard).find(instance_id).
+        send(attachment_name).
+        process_delayed!
     end
 
   end
@@ -60,9 +59,11 @@ module DelayedPaperclip
         :only_process => only_process_default,
         :url_with_processing => DelayedPaperclip.options[:url_with_processing],
         :processing_image_url => DelayedPaperclip.options[:processing_image_url],
-        :queue => DelayedPaperclip.options[:queue]
+        :queue => nil
       }.each do |option, default|
+
         paperclip_definitions[name][:delayed][option] = options.key?(option) ? options[option] : default
+
       end
 
       # Sets callback
@@ -90,7 +91,7 @@ module DelayedPaperclip
       mark_enqueue_delayed_processing
 
       (@_enqued_for_processing || []).each do |name|
-        enqueue_post_processing_for(name)
+        enqueue_post_processing_for(name, current_shard)
       end
       @_enqued_for_processing_with_processing = []
       @_enqued_for_processing = []
@@ -106,8 +107,8 @@ module DelayedPaperclip
       end
     end
 
-    def enqueue_post_processing_for name
-      DelayedPaperclip.enqueue(self.class.name, read_attribute(:id), name.to_sym)
+    def enqueue_post_processing_for(name, shard = :master)
+      DelayedPaperclip.enqueue(self.class.name, read_attribute(:id), name.to_sym, shard)
     end
 
     def prepare_enqueueing_for name
